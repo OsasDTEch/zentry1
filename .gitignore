@@ -1,0 +1,65 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.eggs/
+*.egg
+*.manifest
+*.spec
+
+# Virtual environment
+.venv/
+env/
+venv/
+ENV/
+
+# IDE settings
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# Logs
+*.log
+*.out
+*.err
+logs/
+*.pid
+
+# Database & migrations
+*.db
+*.sqlite3
+alembic/versions/*.pyc
+alembic.ini
+migrations/
+
+# Environment variables
+.env
+.env.*
+*.env.local
+.envrc
+
+# Cache
+*.cache
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.bak
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Node (if you later add frontend inside same repo)
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Render specific
+.render-build/
