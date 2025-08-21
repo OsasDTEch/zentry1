@@ -162,7 +162,7 @@ def privacy_policy():
 
 
 #IG NEEDED=
-APP_ID=os.getenv('IG_API_ID')
+APP_ID=os.getenv('IG_APP_ID')
 APP_SECRET=os.getenv('IG_APP_SECRET')
 WEBHOOK_VERIFY_TOKEN= os.getenv('WEBHOOK_VERIFY_TOKEN')
 REDIRECT_URI=os.getenv('REDIRECT_URL')
