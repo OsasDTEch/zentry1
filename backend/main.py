@@ -9,8 +9,8 @@ from datetime import datetime, timedelta
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from .database.db import Base,engine,get_db,SessionLocal
-import database.models as models
-import database.schema as schema
+from .database import models as models
+from .database import schema as schema
 from .auth.validate_user import get_current_user
 from .auth.auth import hash_password,verify_password,create_access_token
 
