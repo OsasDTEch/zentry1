@@ -195,29 +195,32 @@ def instagram_callback(
         db: Session = Depends(get_db)
 ):
     """
-    Exchanges the code for long-lived access token and stores it in Business table.
-    Uses the 'state' parameter to know which business/user initiated the OAuth flow.
+    Enhanced callback that handles the authorization code and permissions
     """
-    # --- Step 0: Read query params ---
     code = request.query_params.get("code")
     state = request.query_params.get("state")
+    error = request.query_params.get("error")
+    error_description = request.query_params.get("error_description")
+
+    # Handle authorization errors
+    if error:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Authorization failed: {error} - {error_description}"
+        )
 
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code missing")
     if not state:
         raise HTTPException(status_code=400, detail="State parameter missing")
 
-    # --- Extract business_id (handle both formats) ---
+    # Extract business_id
     try:
-        # Handle format: "business_id=123"
         if "business_id=" in state:
             business_id = int(state.split("business_id=")[1])
-        # Handle simple format: "123"
         else:
             business_id = int(state)
-
-        print(f"Extracted business_id: {business_id}")
-    except (ValueError, IndexError) as e:
+    except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail=f"Invalid state format: {state}")
 
     business = db.query(models.Business).get(business_id)
@@ -225,82 +228,151 @@ def instagram_callback(
         raise HTTPException(status_code=404, detail="Business not found")
 
     try:
-        # --- Step 1: Exchange code for short-lived token ---
-        r = requests.post("https://graph.facebook.com/v21.0/oauth/access_token", data={
+        # Step 1: Exchange code for access token
+        token_url = "https://graph.facebook.com/v18.0/oauth/access_token"  # Use Facebook endpoint for Facebook Login
+        # For Instagram Business Login, use: "https://graph.instagram.com/oauth/access_token"
+
+        response = requests.post(token_url, data={
             "client_id": APP_ID,
             "client_secret": APP_SECRET,
             "redirect_uri": REDIRECT_URI,
             "code": code
         })
-        if r.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
-        short_token = r.json()["access_token"]
 
-        # --- Step 2: Exchange short-lived for long-lived token ---
-        r2 = requests.get("https://graph.facebook.com/v21.0/oauth/access_token", params={
-            "grant_type": "fb_exchange_token",
-            "client_id": APP_ID,
-            "client_secret": APP_SECRET,
-            "fb_exchange_token": short_token
-        })
-        if r2.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Long-lived token exchange failed: {r2.text}")
-        long_token = r2.json()["access_token"]
-
-        # --- Step 3: Get pages the user manages ---
-        pages_response = requests.get(
-            "https://graph.facebook.com/v21.0/me/accounts",
-            params={"access_token": long_token}
-        )
-        if pages_response.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch pages: {pages_response.text}")
-
-        pages = pages_response.json()
-        if "data" not in pages or not pages["data"]:
-            raise HTTPException(status_code=400, detail="No Facebook Pages found for user")
-
-        # Find page that matches business.page_id
-        page = next((p for p in pages["data"] if p["id"] == str(business.page_id)), None)
-        if not page:
-            raise HTTPException(status_code=400, detail="Configured FB Page not found for this user")
-
-        page_token = page["access_token"]
-
-        # --- Step 4: Get IG Business Account linked to that page ---
-        ig_response = requests.get(
-            f"https://graph.facebook.com/v21.0/{business.page_id}",
-            params={
-                "fields": "instagram_business_account",
-                "access_token": page_token
-            }
-        )
-        if ig_response.status_code != 200:
-            raise HTTPException(status_code=400, detail=f"Failed to fetch IG account: {ig_response.text}")
-
-        ig_account_info = ig_response.json()
-        ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
-
-        if not ig_user_id:
+        if response.status_code != 200:
             raise HTTPException(
                 status_code=400,
-                detail="No Instagram Business account linked to this Facebook Page"
+                detail=f"Token exchange failed: {response.text}"
             )
 
-        # --- Step 5: Save to DB ---
-        business.ig_user_id = ig_user_id
-        business.access_token = page_token  # Use page token, not user token
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+
+        if not access_token:
+            raise HTTPException(status_code=400, detail="No access token received")
+
+        # Step 2: Get long-lived token (for Facebook Login)
+        long_lived_response = requests.get(
+            "https://graph.facebook.com/v18.0/oauth/access_token",
+            params={
+                "grant_type": "fb_exchange_token",
+                "client_id": APP_ID,
+                "client_secret": APP_SECRET,
+                "fb_exchange_token": access_token
+            }
+        )
+
+        if long_lived_response.status_code == 200:
+            long_lived_data = long_lived_response.json()
+            access_token = long_lived_data.get("access_token", access_token)
+
+        # Step 3: Verify permissions were granted
+        permissions_response = requests.get(
+            "https://graph.facebook.com/v18.0/me/permissions",
+            params={"access_token": access_token}
+        )
+
+        granted_permissions = []
+        if permissions_response.status_code == 200:
+            perms_data = permissions_response.json()
+            granted_permissions = [
+                perm["permission"] for perm in perms_data.get("data", [])
+                if perm.get("status") == "granted"
+            ]
+
+        # Step 4: Get user's Facebook Pages (if using Facebook Login)
+        pages_response = requests.get(
+            "https://graph.facebook.com/v18.0/me/accounts",
+            params={
+                "access_token": access_token,
+                "fields": "id,name,access_token,instagram_business_account"
+            }
+        )
+
+        if pages_response.status_code != 200:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Failed to fetch pages: {pages_response.text}"
+            )
+
+        pages_data = pages_response.json()
+        pages = pages_data.get("data", [])
+
+        # Find page with Instagram Business Account
+        instagram_page = None
+        for page in pages:
+            if page.get("instagram_business_account"):
+                instagram_page = page
+                break
+
+        if not instagram_page:
+            raise HTTPException(
+                status_code=400,
+                detail="No Facebook Page with Instagram Business Account found"
+            )
+
+        # Step 5: Save to database
+        business.ig_user_id = instagram_page["instagram_business_account"]["id"]
+        business.access_token = instagram_page["access_token"]  # Use page token
+        business.page_id = instagram_page["id"]
         business.token_expires_at = datetime.utcnow() + timedelta(days=60)
+
         db.commit()
         db.refresh(business)
 
         return {
-            "detail": f"Instagram Business connected successfully for {business.name}",
-            "ig_user_id": ig_user_id,
+            "success": True,
+            "detail": f"Instagram successfully connected for {business.name}",
             "business_id": business_id,
-            "page_id": business.page_id
+            "ig_user_id": business.ig_user_id,
+            "page_id": business.page_id,
+
+            "page_name": instagram_page.get("name"),
+            "expires_at": business.token_expires_at.isoformat()
         }
 
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=400, detail=f"API request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
+
+# Alternative endpoint for Instagram Business Login (if not using Facebook Pages)
+@app.get("/instagram/auth-instagram/{business_id}")
+def get_instagram_business_auth_url(business_id: int, db: Session = Depends(get_db)):
+    """
+    Generate Instagram Business Login authorization URL
+    Use this if your Instagram account is NOT linked to a Facebook Page
+    """
+    business = db.query(models.Business).get(business_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+
+    # For Instagram Business Login (direct Instagram login)
+    scopes = [
+        "instagram_basic",
+        "instagram_manage_comments",
+        "instagram_manage_messages"
+        # Note: pages_show_list not needed for direct Instagram login
+    ]
+
+    scope_string = ",".join(scopes)
+    state = f"business_id={business_id}"
+
+    auth_url = (
+        f"https://www.instagram.com/oauth/authorize?"
+        f"client_id={APP_ID}&"  # Use Instagram App ID here
+        f"redirect_uri={REDIRECT_URI}&"
+        f"scope={scope_string}&"
+        f"response_type=code&"
+        f"state={state}"
+    )
+
+    return {
+        "auth_url": auth_url,
+        "business_id": business_id,
+        "business_name": business.name,
+        "required_permissions": scopes,
+        "login_type": "Instagram Business Login",
+        "instructions": "Click the auth_url to authorize Instagram access directly"
+    }
