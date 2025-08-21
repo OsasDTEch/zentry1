@@ -13,6 +13,22 @@ from .database import models as models
 from .database import schema as schema
 from .auth.validate_user import get_current_user
 from .auth.auth import hash_password,verify_password,create_access_token
+from fastapi.middleware.cors import CORSMiddleware
+
+app = FastAPI(title="Zentry Backend")
+
+# Add CORS middleware
+origins = [
+    "*",  # allow all origins for testing; in production, list allowed domains
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,        # or ["https://yourfrontend.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 from fastapi.security import OAuth2PasswordRequestForm
 class LoginRequest(BaseModel):
