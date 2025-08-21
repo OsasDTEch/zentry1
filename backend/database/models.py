@@ -49,7 +49,6 @@ class Business(Base):
     appointments = relationship("Appointment", back_populates="business")
 
     # In your models.py file, add this field to the Business model:
-    granted_permissions = Column(String, nullable=True)  # Store comma-separated permissions
 class Customer(Base):
     __tablename__ = "customers"
 
