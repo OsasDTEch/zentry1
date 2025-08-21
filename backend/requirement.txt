@@ -8,6 +8,6 @@ alembic
 passlib[bcrypt]
 python-jose[cryptography]
 pydantic
-pip install pydantic[email]
+pydantic[email]
 pydantic_ai
 langgraph

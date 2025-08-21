@@ -2,7 +2,7 @@ from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from jose import jwt, JWTError
 from sqlalchemy.orm import Session
-from zentry.backend.database.db import get_db
+from ..database.db import get_db
 import os
 
 import zentry.backend.database.models as models

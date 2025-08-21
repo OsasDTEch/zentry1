@@ -8,11 +8,11 @@ from datetime import datetime, timedelta
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
-from zentry.backend.database.db import Base,engine,get_db,SessionLocal
-import zentry.backend.database.models as models
-import zentry.backend.database.schema as schema
-from zentry.backend.auth.validate_user import get_current_user
-from zentry.backend.auth.auth import hash_password,verify_password,create_access_token
+from .database.db import Base,engine,get_db,SessionLocal
+import database.models as models
+import database.schema as schema
+from .auth.validate_user import get_current_user
+from .auth.auth import hash_password,verify_password,create_access_token
 
 from fastapi.security import OAuth2PasswordRequestForm
 class LoginRequest(BaseModel):
