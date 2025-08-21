@@ -192,56 +192,57 @@ async def instagram_webhook(request: Request):
 @app.get("/instagram/callback")
 def instagram_callback(code: str, state: str | None = None, db: Session = Depends(get_db)):
     """
-    Exchanges the code for long-lived access token and stores it in Business table
-    business_id: which business to connect
-    
+    Exchanges the code for long-lived access token and stores it in Business table.
+    Uses the 'state' parameter to know which business/user initiated the OAuth flow.
     """
+    # Extract business_id from state
     business_id = None
     if state:
-        # Example state format: "business_id=123"
         parts = state.split("=")
         if len(parts) == 2 and parts[0] == "business_id":
             business_id = int(parts[1])
     if not business_id:
         raise HTTPException(status_code=400, detail="Business ID missing")
-    # Step 1: Short-lived token
-    r = requests.get("https://api.instagram.com/oauth/access_token", params={
+
+    business = db.query(models.Business).get(business_id)
+    if not business:
+        raise HTTPException(status_code=404, detail="Business not found")
+
+    # Step 1: Exchange code for short-lived access token (POST request)
+    r = requests.post("https://api.instagram.com/oauth/access_token", data={
         "client_id": APP_ID,
-        "redirect_uri": REDIRECT_URI,
-        "grant_type":"authorization_code",
         "client_secret": APP_SECRET,
+        "grant_type": "authorization_code",
+        "redirect_uri": REDIRECT_URI,
         "code": code
     })
     r.raise_for_status()
     short_token = r.json()["access_token"]
 
-    # Step 2: Long-lived token
-    r2 = requests.get("https://api.instagram.com/oauth/access_token", params={
+    # Step 2: Exchange short-lived token for long-lived token (POST request)
+    r2 = requests.get("https://graph.instagram.com/access_token", params={
         "grant_type": "ig_exchange_token",
-        "client_id": APP_ID,
         "client_secret": APP_SECRET,
         "access_token": short_token
     })
     r2.raise_for_status()
     long_token = r2.json()["access_token"]
 
-    # Step 3: Get IG Business ID from page
-    business = db.query(models.Business).get(business_id)
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-
-    # You must have a linked Facebook Page ID in the business
+    # Step 3: Get Instagram Business Account ID from linked Facebook Page
     page_id = business.page_id
     ig_account_info = requests.get(
         f"https://graph.instagram.com/{page_id}?fields=instagram_business_account&access_token={long_token}"
     ).json()
     ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
 
-    # Step 4: Save tokens in DB
+    if not ig_user_id:
+        raise HTTPException(status_code=400, detail="Failed to fetch IG Business ID")
+
+    # Step 4: Save tokens and IG user ID in DB
     business.ig_user_id = ig_user_id
     business.access_token = long_token
     business.token_expires_at = datetime.utcnow() + timedelta(days=60)
     db.commit()
     db.refresh(business)
 
-    return {"detail": "Instagram Business connected successfully", "ig_user_id": ig_user_id}
+    return {"detail": f"Instagram Business connected successfully for {business.name}", "ig_user_id": ig_user_id}
