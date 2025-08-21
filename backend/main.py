@@ -191,8 +191,8 @@ async def instagram_webhook(request: Request):
 # --- Instagram OAuth callback to get access token ---
 @app.get("/instagram/callback")
 def instagram_callback(
-    request: Request,
-    db: Session = Depends(get_db)
+        request: Request,
+        db: Session = Depends(get_db)
 ):
     """
     Exchanges the code for long-lived access token and stores it in Business table.
@@ -204,78 +204,103 @@ def instagram_callback(
 
     if not code:
         raise HTTPException(status_code=400, detail="Authorization code missing")
-    if not state or "business_id=" not in state:
-        raise HTTPException(status_code=400, detail="Business ID missing")
+    if not state:
+        raise HTTPException(status_code=400, detail="State parameter missing")
 
-    # --- Extract business_id ---
+    # --- Extract business_id (handle both formats) ---
     try:
-        business_id = int(state.split("business_id=")[1])
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid state format")
+        # Handle format: "business_id=123"
+        if "business_id=" in state:
+            business_id = int(state.split("business_id=")[1])
+        # Handle simple format: "123"
+        else:
+            business_id = int(state)
+
+        print(f"Extracted business_id: {business_id}")
+    except (ValueError, IndexError) as e:
+        raise HTTPException(status_code=400, detail=f"Invalid state format: {state}")
 
     business = db.query(models.Business).get(business_id)
     if not business:
         raise HTTPException(status_code=404, detail="Business not found")
 
-    # --- Step 1: Exchange code for short-lived token ---
-    r = requests.post("https://graph.facebook.com/v21.0/oauth/access_token", data={
-        "client_id": APP_ID,
-        "client_secret": APP_SECRET,
-        "redirect_uri": REDIRECT_URI,
-        "code": code
-    })
-    if r.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
-    short_token = r.json()["access_token"]
+    try:
+        # --- Step 1: Exchange code for short-lived token ---
+        r = requests.post("https://graph.facebook.com/v21.0/oauth/access_token", data={
+            "client_id": APP_ID,
+            "client_secret": APP_SECRET,
+            "redirect_uri": REDIRECT_URI,
+            "code": code
+        })
+        if r.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
+        short_token = r.json()["access_token"]
 
-    # --- Step 2: Exchange short-lived for long-lived token ---
-    r2 = requests.get("https://graph.facebook.com/v21.0/oauth/access_token", params={
-        "grant_type": "fb_exchange_token",
-        "client_id": APP_ID,
-        "client_secret": APP_SECRET,
-        "fb_exchange_token": short_token
-    })
-    if r2.status_code != 200:
-        raise HTTPException(status_code=400, detail=f"Long-lived token exchange failed: {r2.text}")
-    long_token = r2.json()["access_token"]
+        # --- Step 2: Exchange short-lived for long-lived token ---
+        r2 = requests.get("https://graph.facebook.com/v21.0/oauth/access_token", params={
+            "grant_type": "fb_exchange_token",
+            "client_id": APP_ID,
+            "client_secret": APP_SECRET,
+            "fb_exchange_token": short_token
+        })
+        if r2.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Long-lived token exchange failed: {r2.text}")
+        long_token = r2.json()["access_token"]
 
-    # --- Step 3: Get pages the user manages ---
-    pages = requests.get(
-        "https://graph.facebook.com/v21.0/me/accounts",
-        params={"access_token": long_token}
-    ).json()
+        # --- Step 3: Get pages the user manages ---
+        pages_response = requests.get(
+            "https://graph.facebook.com/v21.0/me/accounts",
+            params={"access_token": long_token}
+        )
+        if pages_response.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch pages: {pages_response.text}")
 
-    if "data" not in pages or not pages["data"]:
-        raise HTTPException(status_code=400, detail="No Facebook Pages found for user")
+        pages = pages_response.json()
+        if "data" not in pages or not pages["data"]:
+            raise HTTPException(status_code=400, detail="No Facebook Pages found for user")
 
-    # Find page that matches business.page_id
-    page = next((p for p in pages["data"] if p["id"] == str(business.page_id)), None)
-    if not page:
-        raise HTTPException(status_code=400, detail="Configured FB Page not found for this user")
+        # Find page that matches business.page_id
+        page = next((p for p in pages["data"] if p["id"] == str(business.page_id)), None)
+        if not page:
+            raise HTTPException(status_code=400, detail="Configured FB Page not found for this user")
 
-    page_token = page["access_token"]
+        page_token = page["access_token"]
 
-    # --- Step 4: Get IG Business Account linked to that page ---
-    ig_account_info = requests.get(
-        f"https://graph.facebook.com/v21.0/{business.page_id}",
-        params={
-            "fields": "instagram_business_account",
-            "access_token": page_token
+        # --- Step 4: Get IG Business Account linked to that page ---
+        ig_response = requests.get(
+            f"https://graph.facebook.com/v21.0/{business.page_id}",
+            params={
+                "fields": "instagram_business_account",
+                "access_token": page_token
+            }
+        )
+        if ig_response.status_code != 200:
+            raise HTTPException(status_code=400, detail=f"Failed to fetch IG account: {ig_response.text}")
+
+        ig_account_info = ig_response.json()
+        ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
+
+        if not ig_user_id:
+            raise HTTPException(
+                status_code=400,
+                detail="No Instagram Business account linked to this Facebook Page"
+            )
+
+        # --- Step 5: Save to DB ---
+        business.ig_user_id = ig_user_id
+        business.access_token = page_token  # Use page token, not user token
+        business.token_expires_at = datetime.utcnow() + timedelta(days=60)
+        db.commit()
+        db.refresh(business)
+
+        return {
+            "detail": f"Instagram Business connected successfully for {business.name}",
+            "ig_user_id": ig_user_id,
+            "business_id": business_id,
+            "page_id": business.page_id
         }
-    ).json()
 
-    ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
-    if not ig_user_id:
-        raise HTTPException(status_code=400, detail="Failed to fetch IG Business ID")
-
-    # --- Step 5: Save to DB ---
-    business.ig_user_id = ig_user_id
-    business.access_token = long_token
-    business.token_expires_at = datetime.utcnow() + timedelta(days=60)
-    db.commit()
-    db.refresh(business)
-
-    return {
-        "detail": f"Instagram Business connected successfully for {business.name}",
-        "ig_user_id": ig_user_id
-    }
+    except requests.exceptions.RequestException as e:
+        raise HTTPException(status_code=400, detail=f"API request failed: {str(e)}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
