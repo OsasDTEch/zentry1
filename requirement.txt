@@ -11,3 +11,5 @@ pydantic
 pydantic[email]
 pydantic_ai
 langgraph
+psycopg2-binary
+
