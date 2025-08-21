@@ -197,7 +197,7 @@ def instagram_callback(
         db: Session = Depends(get_db)
 ):
     """
-    Simplified callback - works with existing database schema
+    Instagram Business Login callback - works with graph.instagram.com
     """
     # --- Step 0: Read query params ---
     code = request.query_params.get("code")
@@ -231,8 +231,8 @@ def instagram_callback(
         raise HTTPException(status_code=404, detail="Business not found")
 
     try:
-        # --- Step 1: Exchange code for short-lived token ---
-        token_response = requests.post("https://graph.facebook.com/v18.0/oauth/access_token", data={
+        # --- Step 1: Exchange code for short-lived Instagram token ---
+        token_response = requests.post("https://graph.instagram.com/oauth/access_token", data={
             "client_id": APP_ID,
             "client_secret": APP_SECRET,
             "redirect_uri": REDIRECT_URI,
@@ -247,12 +247,13 @@ def instagram_callback(
 
         token_data = token_response.json()
         short_token = token_data.get("access_token")
+        user_id = token_data.get("user_id")
 
         if not short_token:
             raise HTTPException(status_code=400, detail="No access token received")
 
-        # --- Step 2: Exchange for long-lived token ---
-        long_lived_response = requests.get("https://graph.facebook.com/v18.0/oauth/access_token", params={
+        # --- Step 2: Exchange for long-lived Instagram token ---
+        long_lived_response = requests.get("https://graph.instagram.com/oauth/access_token", params={
             "grant_type": "fb_exchange_token",
             "client_id": APP_ID,
             "client_secret": APP_SECRET,
@@ -261,51 +262,41 @@ def instagram_callback(
 
         if long_lived_response.status_code == 200:
             long_lived_data = long_lived_response.json()
-            user_token = long_lived_data.get("access_token", short_token)
+            access_token = long_lived_data.get("access_token", short_token)
+            expires_in = long_lived_data.get("expires_in", 5184000)  # Default 60 days
         else:
-            user_token = short_token
+            access_token = short_token
+            expires_in = 3600  # 1 hour for short-lived token
 
-        # --- Step 3: Get user's Facebook Pages ---
-        pages_response = requests.get(
-            "https://graph.facebook.com/v18.0/me/accounts",
+        # --- Step 3: Get Instagram user profile info ---
+        profile_response = requests.get(
+            f"https://graph.instagram.com/{user_id}",
             params={
-                "access_token": user_token,
-                "fields": "id,name,access_token,instagram_business_account"
+                "fields": "id,username,name,account_type,media_count,followers_count",
+                "access_token": access_token
             }
         )
 
-        if pages_response.status_code != 200:
+        if profile_response.status_code != 200:
             raise HTTPException(
                 status_code=400,
-                detail=f"Failed to fetch pages: {pages_response.text}"
+                detail=f"Failed to get profile: {profile_response.text}"
             )
 
-        pages_data = pages_response.json()
-        pages = pages_data.get("data", [])
+        profile_data = profile_response.json()
 
-        if not pages:
-            raise HTTPException(status_code=400, detail="No Facebook Pages found")
+        # Verify it's a business account
+        if profile_data.get("account_type") not in ["BUSINESS", "CREATOR"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Account must be an Instagram Business or Creator account"
+            )
 
-        # --- Step 4: Find page with Instagram Business Account ---
-        instagram_page = None
-        for page in pages:
-            if page.get("instagram_business_account"):
-                instagram_page = page
-                break
-
-        if not instagram_page:
-            return {
-                "status": "partial_success",
-                "message": "Facebook connected but no Instagram Business Account found",
-                "available_pages": [{"id": p["id"], "name": p["name"]} for p in pages],
-                "instructions": "Please link an Instagram Business Account to one of your Facebook Pages"
-            }
-
-        # --- Step 5: Save to database (using existing columns only) ---
-        business.ig_user_id = instagram_page["instagram_business_account"]["id"]
-        business.access_token = instagram_page["access_token"]  # Use page token
-        business.page_id = instagram_page["id"]
-        business.token_expires_at = datetime.utcnow() + timedelta(days=60)
+        # --- Step 4: Save to database ---
+        business.ig_user_id = profile_data.get("id")
+        business.access_token = access_token
+        business.page_id = None  # Not needed for Instagram Business Login
+        business.token_expires_at = datetime.utcnow() + timedelta(seconds=expires_in)
 
         db.commit()
         db.refresh(business)
@@ -316,17 +307,23 @@ def instagram_callback(
             "business_id": business_id,
             "business_name": business.name,
             "ig_user_id": business.ig_user_id,
-            "page_id": business.page_id,
-            "page_name": instagram_page.get("name"),
+            "username": profile_data.get("username"),
+            "account_type": profile_data.get("account_type"),
+            "followers_count": profile_data.get("followers_count"),
+            "media_count": profile_data.get("media_count"),
             "expires_at": business.token_expires_at.isoformat(),
-            "next_steps": "You can now manage Instagram messages and comments through the CRM"
+            "capabilities": [
+                "Send/receive Instagram Direct Messages",
+                "Moderate comments on posts",
+                "Publish content",
+                "Get profile insights"
+            ]
         }
 
     except requests.exceptions.RequestException as e:
         raise HTTPException(status_code=400, detail=f"API request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
 
 @app.get("/instagram/auth-instagram/{business_id}")
 def get_instagram_business_auth_url(business_id: int, db: Session = Depends(get_db)):
@@ -408,10 +405,11 @@ def get_instagram_status(business_id: int, db: Session = Depends(get_db)):
 
 
 # 3. Test Connection
+# Also update your test endpoint to use graph.instagram.com
 @app.get("/business/{business_id}/test-instagram")
 def test_instagram_connection(business_id: int, db: Session = Depends(get_db)):
     """
-    Test the Instagram connection by making a simple API call
+    Test Instagram Business Login connection
     """
     business = db.query(models.Business).get(business_id)
     if not business:
@@ -421,11 +419,11 @@ def test_instagram_connection(business_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Instagram not connected")
 
     try:
-        # Test API call - get basic profile info
+        # Test API call using graph.instagram.com
         test_response = requests.get(
-            f"https://graph.facebook.com/v18.0/{business.ig_user_id}",
+            f"https://graph.instagram.com/{business.ig_user_id}",
             params={
-                "fields": "id,username,name,profile_picture_url,followers_count,media_count",
+                "fields": "id,username,name,account_type,profile_picture_url,followers_count,media_count",
                 "access_token": business.access_token
             }
         )
@@ -441,9 +439,10 @@ def test_instagram_connection(business_id: int, db: Session = Depends(get_db)):
 
         return {
             "success": True,
-            "message": "Instagram connection working!",
+            "message": "Instagram Business Login connection working!",
             "profile": profile_data,
-            "business_name": business.name
+            "business_name": business.name,
+            "api_host": "graph.instagram.com"
         }
 
     except Exception as e:
@@ -498,29 +497,3 @@ def get_instagram_messages(business_id: int, db: Session = Depends(get_db)):
         }
 
 
-# 5. Disconnect Instagram
-@app.delete("/business/{business_id}/disconnect-instagram")
-def disconnect_instagram(business_id: int, db: Session = Depends(get_db)):
-    """
-    Disconnect Instagram account from business
-    """
-    business = db.query(models.Business).get(business_id)
-    if not business:
-        raise HTTPException(status_code=404, detail="Business not found")
-
-    if not business.ig_user_id:
-        raise HTTPException(status_code=400, detail="Instagram not connected")
-
-    # Clear Instagram data
-    business.ig_user_id = None
-    business.access_token = None
-    business.page_id = None
-    business.token_expires_at = None
-
-    db.commit()
-
-    return {
-        "success": True,
-        "message": f"Instagram disconnected from {business.name}",
-        "business_id": business_id
-    }
