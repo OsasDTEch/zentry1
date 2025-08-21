@@ -3,11 +3,13 @@ import os
 from fastapi import FastAPI, Depends, HTTPException, status, Request,Query
 from fastavro.schema import fullname
 import requests
+from fastapi import Query
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta
 
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from fastapi.middleware.cors import CORSMiddleware
 from .database.db import Base,engine,get_db,SessionLocal
 from .database import models as models
 from .database import schema as schema
@@ -31,6 +33,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 from fastapi.security import OAuth2PasswordRequestForm
 class LoginRequest(BaseModel):
     email: str
@@ -41,6 +44,18 @@ class BusinessCreate(BaseModel):
 #create tables
 Base.metadata.create_all(bind=engine)
 app = FastAPI(title="Zentry Backend")
+# Add CORS middleware
+origins = [
+    "*",  # allow all origins for testing; in production, list allowed domains
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,        # or ["https://yourfrontend.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 @app.get("/")
 def root():
     return {"message": "CRM API is running 🚀"}

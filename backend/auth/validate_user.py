@@ -8,7 +8,7 @@ import os
 
 from ..database import models as models
 SECRET_KEY = os.getenv('AUTH_SECRET_KEY')
-print(SECRET_KEY)
+
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
