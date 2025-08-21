@@ -190,45 +190,56 @@ async def instagram_webhook(request: Request):
 
 # --- Instagram OAuth callback to get access token ---
 @app.get("/instagram/callback")
-def instagram_callback(code: str, state: str | None = None, db: Session = Depends(get_db)):
+def instagram_callback(
+    request: Request,
+    db: Session = Depends(get_db)
+):
     """
     Exchanges the code for long-lived access token and stores it in Business table.
     Uses the 'state' parameter to know which business/user initiated the OAuth flow.
     """
-    # Extract business_id from state
-    business_id = None
-    if state:
-        parts = state.split("=")
-        if len(parts) == 2 and parts[0] == "business_id":
-            business_id = int(parts[1])
-    if not business_id:
+    # --- Step 0: Read query params ---
+    code = request.query_params.get("code")
+    state = request.query_params.get("state")
+
+    if not code:
+        raise HTTPException(status_code=400, detail="Authorization code missing")
+    if not state or "business_id=" not in state:
         raise HTTPException(status_code=400, detail="Business ID missing")
+
+    # --- Extract business_id ---
+    try:
+        business_id = int(state.split("business_id=")[1])
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid state format")
 
     business = db.query(models.Business).get(business_id)
     if not business:
         raise HTTPException(status_code=404, detail="Business not found")
 
-    # Step 1: Exchange code for short-lived token
+    # --- Step 1: Exchange code for short-lived token ---
     r = requests.post("https://graph.facebook.com/v21.0/oauth/access_token", data={
         "client_id": APP_ID,
         "client_secret": APP_SECRET,
         "redirect_uri": REDIRECT_URI,
         "code": code
     })
-    r.raise_for_status()
+    if r.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"Token exchange failed: {r.text}")
     short_token = r.json()["access_token"]
 
-    # Step 2: Exchange short-lived token for long-lived token
+    # --- Step 2: Exchange short-lived for long-lived token ---
     r2 = requests.get("https://graph.facebook.com/v21.0/oauth/access_token", params={
         "grant_type": "fb_exchange_token",
         "client_id": APP_ID,
         "client_secret": APP_SECRET,
         "fb_exchange_token": short_token
     })
-    r2.raise_for_status()
+    if r2.status_code != 200:
+        raise HTTPException(status_code=400, detail=f"Long-lived token exchange failed: {r2.text}")
     long_token = r2.json()["access_token"]
 
-    # Step 3: Get pages the user manages
+    # --- Step 3: Get pages the user manages ---
     pages = requests.get(
         "https://graph.facebook.com/v21.0/me/accounts",
         params={"access_token": long_token}
@@ -244,7 +255,7 @@ def instagram_callback(code: str, state: str | None = None, db: Session = Depend
 
     page_token = page["access_token"]
 
-    # Step 4: Get IG Business Account linked to that page
+    # --- Step 4: Get IG Business Account linked to that page ---
     ig_account_info = requests.get(
         f"https://graph.facebook.com/v21.0/{business.page_id}",
         params={
@@ -257,7 +268,7 @@ def instagram_callback(code: str, state: str | None = None, db: Session = Depend
     if not ig_user_id:
         raise HTTPException(status_code=400, detail="Failed to fetch IG Business ID")
 
-    # Step 5: Save to DB
+    # --- Step 5: Save to DB ---
     business.ig_user_id = ig_user_id
     business.access_token = long_token
     business.token_expires_at = datetime.utcnow() + timedelta(days=60)
