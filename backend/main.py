@@ -82,6 +82,51 @@ def add_business(user_id: int, business_in: BusinessCreate, db: Session = Depend
         "message": f"Business '{new_business.name}' added for user '{user.email}'",
         "business": {"id": new_business.id, "name": new_business.name, "industry": new_business.industry}
     }
+@app.get("/privacy-policy")
+def privacy_policy():
+    return {
+        "title": "Privacy Policy - Zentry CRM",
+        "last_updated": "2025-08-21",
+        "content": """
+        Zentry CRM respects your privacy. This Privacy Policy explains how we collect, use, 
+        and protect your information when you use our CRM services and connect your Instagram account.
+
+        1. Information We Collect:
+           - Account details (email, name) when you register.
+           - Business information you provide (business name, industry, etc.).
+           - Instagram data (access tokens, business account IDs) when you connect Instagram.
+           - CRM usage data (interactions, leads, and customer messages).
+
+        2. How We Use Your Information:
+           - To provide CRM features such as lead management, business tracking, 
+             and Instagram message integration.
+           - To authenticate your account and secure access.
+           - To improve our services and provide support.
+
+        3. Sharing of Information:
+           - We do not sell or rent your data.
+           - We may share data only with trusted third parties necessary for 
+             Instagram API integration and payment processing.
+           - We comply with all legal obligations if required to disclose information.
+
+        4. Data Retention:
+           - We store Instagram access tokens securely and refresh them as required.
+           - You can disconnect Instagram at any time, which deletes your token.
+           - We retain business data until you request deletion.
+
+        5. Security:
+           - Tokens and sensitive data are encrypted and stored securely.
+           - We implement industry-standard security practices.
+
+        6. Your Rights:
+           - You can request access, correction, or deletion of your data at any time 
+             by contacting support.
+
+        7. Contact:
+           If you have any questions, please contact us at: support@zentrycrm.com
+        """
+    }
+
 
 
 #IG NEEDED=
