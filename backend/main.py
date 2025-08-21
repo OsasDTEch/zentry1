@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from .database.db import Base,engine,get_db,SessionLocal
 from .database import models as models
 from .database import schema as schema
+from fastapi import Query
 from .auth.validate_user import get_current_user
 from .auth.auth import hash_password,verify_password,create_access_token
 from fastapi.middleware.cors import CORSMiddleware
@@ -178,7 +179,16 @@ def instagram_callback(code: str, business_id: int, db: Session = Depends(get_db
     """
     Exchanges the code for long-lived access token and stores it in Business table
     business_id: which business to connect
+    
     """
+     business_id = None
+    if state:
+        # Example state format: "business_id=123"
+        parts = state.split("=")
+        if len(parts) == 2 and parts[0] == "business_id":
+            business_id = int(parts[1])
+    if not business_id:
+        raise HTTPException(status_code=400, detail="Business ID missing")
     # Step 1: Short-lived token
     r = requests.get("https://api.instagram.com/oauth/access_token", params={
         "client_id": APP_ID,
