@@ -44,7 +44,6 @@ class BusinessCreate(BaseModel):
     industry: str
 #create tables
 Base.metadata.create_all(bind=engine)
-app = FastAPI(title="Zentry Backend")
 # Add CORS middleware
 origins = [
     "*",  # allow all origins for testing; in production, list allowed domains
