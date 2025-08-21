@@ -208,41 +208,63 @@ def instagram_callback(code: str, state: str | None = None, db: Session = Depend
     if not business:
         raise HTTPException(status_code=404, detail="Business not found")
 
-    # Step 1: Exchange code for short-lived access token (POST request)
-    r = requests.post("https://api.instagram.com/oauth/access_token", data={
+    # Step 1: Exchange code for short-lived token
+    r = requests.post("https://graph.facebook.com/v21.0/oauth/access_token", data={
         "client_id": APP_ID,
         "client_secret": APP_SECRET,
-        "grant_type": "authorization_code",
         "redirect_uri": REDIRECT_URI,
         "code": code
     })
     r.raise_for_status()
     short_token = r.json()["access_token"]
 
-    # Step 2: Exchange short-lived token for long-lived token (POST request)
-    r2 = requests.get("https://graph.instagram.com/access_token", params={
-        "grant_type": "ig_exchange_token",
+    # Step 2: Exchange short-lived token for long-lived token
+    r2 = requests.get("https://graph.facebook.com/v21.0/oauth/access_token", params={
+        "grant_type": "fb_exchange_token",
+        "client_id": APP_ID,
         "client_secret": APP_SECRET,
-        "access_token": short_token
+        "fb_exchange_token": short_token
     })
     r2.raise_for_status()
     long_token = r2.json()["access_token"]
 
-    # Step 3: Get Instagram Business Account ID from linked Facebook Page
-    page_id = business.page_id
-    ig_account_info = requests.get(
-        f"https://graph.instagram.com/{page_id}?fields=instagram_business_account&access_token={long_token}"
+    # Step 3: Get pages the user manages
+    pages = requests.get(
+        "https://graph.facebook.com/v21.0/me/accounts",
+        params={"access_token": long_token}
     ).json()
-    ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
 
+    if "data" not in pages or not pages["data"]:
+        raise HTTPException(status_code=400, detail="No Facebook Pages found for user")
+
+    # Find page that matches business.page_id
+    page = next((p for p in pages["data"] if p["id"] == str(business.page_id)), None)
+    if not page:
+        raise HTTPException(status_code=400, detail="Configured FB Page not found for this user")
+
+    page_token = page["access_token"]
+
+    # Step 4: Get IG Business Account linked to that page
+    ig_account_info = requests.get(
+        f"https://graph.facebook.com/v21.0/{business.page_id}",
+        params={
+            "fields": "instagram_business_account",
+            "access_token": page_token
+        }
+    ).json()
+
+    ig_user_id = ig_account_info.get("instagram_business_account", {}).get("id")
     if not ig_user_id:
         raise HTTPException(status_code=400, detail="Failed to fetch IG Business ID")
 
-    # Step 4: Save tokens and IG user ID in DB
+    # Step 5: Save to DB
     business.ig_user_id = ig_user_id
     business.access_token = long_token
     business.token_expires_at = datetime.utcnow() + timedelta(days=60)
     db.commit()
     db.refresh(business)
 
-    return {"detail": f"Instagram Business connected successfully for {business.name}", "ig_user_id": ig_user_id}
+    return {
+        "detail": f"Instagram Business connected successfully for {business.name}",
+        "ig_user_id": ig_user_id
+    }
