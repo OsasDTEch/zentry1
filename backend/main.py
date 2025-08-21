@@ -190,13 +190,13 @@ async def instagram_webhook(request: Request):
 
 # --- Instagram OAuth callback to get access token ---
 @app.get("/instagram/callback")
-def instagram_callback(code: str, business_id: int, db: Session = Depends(get_db)):
+def instagram_callback(code: str, state: str | None = None, db: Session = Depends(get_db)):
     """
     Exchanges the code for long-lived access token and stores it in Business table
     business_id: which business to connect
     
     """
-     business_id = None
+    business_id = None
     if state:
         # Example state format: "business_id=123"
         parts = state.split("=")
