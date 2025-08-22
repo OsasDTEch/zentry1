@@ -190,7 +190,6 @@ async def instagram_webhook(request: Request):
 
 # --- Instagram OAuth callback to get access token ---
 
-# Update your existing callback to be simpler and work with existing columns
 @app.get("/instagram/callback")
 def instagram_callback(request: Request, db: Session = Depends(get_db)):
     """
