@@ -241,17 +241,19 @@ def instagram_callback(request: Request, db: Session = Depends(get_db)):
             raise HTTPException(status_code=400, detail="Invalid token response")
 
         # Step 2: Exchange for long-lived token
+        # THIS IS THE CRITICAL FIX
         long_lived_response = requests.get(
-            "https://graph.instagram.com/access_token",
+            f"https://graph.facebook.com/v19.0/oauth/access_token", # Use the Facebook Graph API endpoint
             params={
-                "grant_type": "ig_exchange_token",
+                "grant_type": "fb_exchange_token",
+                "client_id": APP_ID, # Client ID is required for this endpoint
                 "client_secret": APP_SECRET,
-                "access_token": short_token
+                "fb_exchange_token": short_token
             }
         )
 
         if long_lived_response.status_code != 200:
-            # THIS IS THE CRITICAL FIX: Raise an error if the long-lived token exchange fails
+            # Raise an error if the long-lived token exchange fails
             raise HTTPException(
                 status_code=long_lived_response.status_code,
                 detail=f"Long-lived token exchange failed: {long_lived_response.text}"
@@ -317,7 +319,6 @@ def instagram_callback(request: Request, db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"API request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
-
 
 # 2. Connection Status Check
 @app.get("/business/{business_id}/instagram-status")
