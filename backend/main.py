@@ -219,7 +219,7 @@ def instagram_callback(request: Request, db: Session = Depends(get_db)):
     try:
         # Step 1: Exchange code for short-lived token
         token_response = requests.post(
-            "https://graph.instagram.com/oauth/access_token",
+            "https://api.instagram.com/oauth/access_token",
             data={
                 "client_id": APP_ID,
                 "client_secret": APP_SECRET,
@@ -243,22 +243,24 @@ def instagram_callback(request: Request, db: Session = Depends(get_db)):
 
         # Step 2: Exchange for long-lived token
         long_lived_response = requests.get(
-            "https://graph.instagram.com/oauth/access_token",
+            "https://graph.instagram.com/access_token",
             params={
-                "grant_type": "fb_exchange_token",
-                "client_id": APP_ID,
+                "grant_type": "ig_exchange_token",
                 "client_secret": APP_SECRET,
-                "fb_exchange_token": short_token
+                "access_token": short_token
             }
         )
 
-        if long_lived_response.status_code == 200:
-            long_lived_data = long_lived_response.json()
-            access_token = long_lived_data.get("access_token", short_token)
-            expires_in = long_lived_data.get("expires_in", 3600)
-        else:
-            access_token = short_token
-            expires_in = 3600
+        if long_lived_response.status_code != 200:
+            # THIS IS THE CRITICAL FIX: Raise an error if the long-lived token exchange fails
+            raise HTTPException(
+                status_code=long_lived_response.status_code,
+                detail=f"Long-lived token exchange failed: {long_lived_response.text}"
+            )
+
+        long_lived_data = long_lived_response.json()
+        access_token = long_lived_data.get("access_token")
+        expires_in = long_lived_data.get("expires_in")
 
         # Step 3: Get user profile
         profile_response = requests.get(
@@ -313,9 +315,10 @@ def instagram_callback(request: Request, db: Session = Depends(get_db)):
         }
 
     except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=400, detail=f"API request failed: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"API request failed: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
+
 
 # 2. Connection Status Check
 @app.get("/business/{business_id}/instagram-status")
